@@ -62,7 +62,7 @@ abstract class TaskHandler {
 
     long completeTimeMillis
 
-
+    List<String> acceleratorIds = []
     /**
      * Model the start transition from {@code #SUBMITTED} to {@code STARTED}
      */
