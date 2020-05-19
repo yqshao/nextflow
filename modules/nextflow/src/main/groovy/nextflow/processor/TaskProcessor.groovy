@@ -1587,7 +1587,6 @@ class TaskProcessor {
     /**
      * @return The map holding the shell environment variables for the task to be executed
      */
-    @Memoized
     Map<String,String> getProcessEnvironment() {
 
         def result = [:]

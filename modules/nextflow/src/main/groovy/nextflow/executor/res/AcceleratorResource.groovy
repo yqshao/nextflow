@@ -35,6 +35,7 @@ class AcceleratorResource {
     final Integer limit
     final String type
     final String runtime
+    List<String> id
 
     AcceleratorResource( Number value ) {
         this(limit: value)

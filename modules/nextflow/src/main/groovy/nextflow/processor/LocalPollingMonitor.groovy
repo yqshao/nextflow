@@ -24,6 +24,7 @@ import groovy.transform.PackageScope
 import groovy.util.logging.Slf4j
 import nextflow.Session
 import nextflow.exception.ProcessUnrecoverableException
+import nextflow.executor.res.AcceleratorResource
 import nextflow.util.Duration
 import nextflow.util.MemoryUnit
 
@@ -60,6 +61,16 @@ class LocalPollingMonitor extends TaskPollingMonitor {
     private final long maxMemory
 
     /**
+     * List of `free` accelerators available to execute pending tasks
+     */
+    private List<String> availAcc
+
+    /**
+     * List of all accelerators available in the system
+     */
+    private List<String> allAcc
+
+    /**
      * Create the task polling monitor with the provided named parameters object.
      * <p>
      * Valid parameters are:
@@ -75,6 +86,7 @@ class LocalPollingMonitor extends TaskPollingMonitor {
         super(params)
         this.availCpus = maxCpus = params.cpus as int
         this.availMemory = maxMemory = params.memory as long
+        this.availAcc = allAcc = params.acc as List<String>
         assert availCpus>0, "Local avail `cpus` attribute cannot be zero"
         assert availMemory>0, "Local avail `memory` attribute cannot zero"
     }
@@ -99,6 +111,7 @@ class LocalPollingMonitor extends TaskPollingMonitor {
 
         final int cpus = configCpus(session,name)
         final long memory = configMem(session,name)
+        final List<String> acc = configAcc(session,name)
         final int size = session.getQueueSize(name, OS.getAvailableProcessors())
 
         log.debug "Creating local task monitor for executor '$name' > cpus=$cpus; memory=${new MemoryUnit(memory)}; capacity=$size; pollInterval=$pollInterval; dumpInterval=$dumpInterval"
@@ -107,6 +120,7 @@ class LocalPollingMonitor extends TaskPollingMonitor {
                 name: name,
                 cpus: cpus,
                 memory: memory,
+                acc: acc,
                 session: session,
                 capacity: size,
                 pollInterval: pollInterval,
@@ -129,6 +143,15 @@ class LocalPollingMonitor extends TaskPollingMonitor {
         (session.getExecConfigProp(name, 'memory', OS.getTotalPhysicalMemorySize()) as MemoryUnit).toBytes()
     }
 
+    @PackageScope
+    static List<String> configAcc(Session session, String name) {
+        // int nAcc = session.getExecConfigProp(name, 'accelerators', 0) as int
+        def acc = System.getenv('CUDA_VISIBLE_DEVICES').tokenize(",").toList()
+        // if( nAcc )
+        //     acc =  acc[0..(nAcc-1)]
+        return acc
+    }
+
     /**
      * @param handler
      *      A {@link TaskHandler} instance
@@ -148,6 +171,16 @@ class LocalPollingMonitor extends TaskPollingMonitor {
      */
     private static long mem(TaskHandler handler) {
         handler.task.getConfig()?.getMemory()?.toBytes() ?: 1
+    }
+
+    /**
+     * @param handler
+     *      A {@link TaskHandler} instance
+     * @return
+     *      The number of cpus requested to execute the specified task
+     */
+    private static AcceleratorResource acc(TaskHandler handler) {
+        handler.task.getConfig()?.getAccelerator()
     }
 
     /**
@@ -175,7 +208,11 @@ class LocalPollingMonitor extends TaskPollingMonitor {
         if( taskMemory>maxMemory)
             throw new ProcessUnrecoverableException("Process requirement exceed available memory -- req: ${new MemoryUnit(taskMemory)}; avail: ${new MemoryUnit(maxMemory)}")
 
-        final result = super.canSubmit(handler) && taskCpus <= availCpus && taskMemory <= availMemory
+        final taskAcc = acc(handler)
+        if( taskAcc.limit>allAcc.size() )
+            throw new ProcessUnrecoverableException("Process requirement exceed available Accelerators -- req: ${taskAcc.limit}; avail: ${allAcc.size()}")
+
+            final result = super.canSubmit(handler) && taskCpus <= availCpus && taskMemory <= availMemory && taskAcc.limit<=availAcc.size()
         if( !result && log.isTraceEnabled( ) ) {
             log.trace "Task `${handler.task.name}` cannot be scheduled -- taskCpus: $taskCpus <= availCpus: $availCpus && taskMemory: ${new MemoryUnit(taskMemory)} <= availMemory: ${new MemoryUnit(availMemory)}"
         }
@@ -190,9 +227,14 @@ class LocalPollingMonitor extends TaskPollingMonitor {
      */
     @Override
     protected void submit(TaskHandler handler) {
-        super.submit(handler)
         availCpus -= cpus(handler)
         availMemory -= mem(handler)
+        AcceleratorResource taskAcc = acc(handler)
+        List<String> taskAccId = availAcc[0..(taskAcc.limit-1)]
+        availAcc -= taskAccId
+        handler.task.processor.session.config.env['CUDA_VISIBLE_DEVICES'] = taskAccId.join(',')
+        handler.acceleratorIds = taskAccId
+        super.submit(handler)
     }
 
     /**
@@ -210,6 +252,7 @@ class LocalPollingMonitor extends TaskPollingMonitor {
         if( result ) {
             availCpus += cpus(handler)
             availMemory += mem(handler)
+            availAcc.addAll(handler.acceleratorIds)
         }
         return result
     }
