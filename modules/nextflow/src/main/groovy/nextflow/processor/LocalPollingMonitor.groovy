@@ -179,8 +179,8 @@ class LocalPollingMonitor extends TaskPollingMonitor {
      * @return
      *      The number of cpus requested to execute the specified task
      */
-    private static AcceleratorResource acc(TaskHandler handler) {
-        handler.task.getConfig()?.getAccelerator()
+    private static int acc(TaskHandler handler) {
+        handler.task.getConfig()?.getAccelerator()?.limit ?: 0
     }
 
     /**
@@ -209,10 +209,10 @@ class LocalPollingMonitor extends TaskPollingMonitor {
             throw new ProcessUnrecoverableException("Process requirement exceed available memory -- req: ${new MemoryUnit(taskMemory)}; avail: ${new MemoryUnit(maxMemory)}")
 
         final taskAcc = acc(handler)
-        if( taskAcc.limit>allAcc.size() )
-            throw new ProcessUnrecoverableException("Process requirement exceed available Accelerators -- req: ${taskAcc.limit}; avail: ${allAcc.size()}")
+        if( taskAcc>allAcc.size() )
+            throw new ProcessUnrecoverableException("Process requirement exceed available Accelerators -- req: ${taskAcc}; avail: ${allAcc.size()}")
 
-            final result = super.canSubmit(handler) && taskCpus <= availCpus && taskMemory <= availMemory && taskAcc.limit<=availAcc.size()
+            final result = super.canSubmit(handler) && taskCpus <= availCpus && taskMemory <= availMemory && taskAcc<=availAcc.size()
         if( !result && log.isTraceEnabled( ) ) {
             log.trace "Task `${handler.task.name}` cannot be scheduled -- taskCpus: $taskCpus <= availCpus: $availCpus && taskMemory: ${new MemoryUnit(taskMemory)} <= availMemory: ${new MemoryUnit(availMemory)}"
         }
@@ -229,10 +229,10 @@ class LocalPollingMonitor extends TaskPollingMonitor {
     protected void submit(TaskHandler handler) {
         availCpus -= cpus(handler)
         availMemory -= mem(handler)
-        AcceleratorResource taskAcc = acc(handler)
-        List<String> taskAccId = availAcc[0..(taskAcc.limit-1)]
+        int taskAcc = acc(handler)
+        List<String> taskAccId = (taskAcc==0)?[]:availAcc[0..(taskAcc-1)]
         availAcc -= taskAccId
-        handler.task.processor.session.config.env['CUDA_VISIBLE_DEVICES'] = taskAccId.join(',')
+        handler.task.processor.session.config.env['CUDA_VISIBLE_DEVICES'] = taskAccId.join(',')?:'-1'
         handler.acceleratorIds = taskAccId
         super.submit(handler)
     }
